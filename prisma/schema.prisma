@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  DESIGNER
+  REVIEWER
+  REQUESTER
+}
+
+enum ReviewerRole {
+  TEAM_LEAD
+  FINANCE
+}
+
+enum WorkflowStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum RequestStatus {
+  IN_PROGRESS
+  WAITING_REVIEW
+  APPROVED
+  REJECTED
+  FAILED
+}
+
+enum DecisionOutcome {
+  APPROVED
+  REJECTED
+}
+
+enum SimulationStatus {
+  PAUSED
+  APPROVED
+  REJECTED
+  FAILED
+}
+
+model User {
+  id                  String            @id @default(uuid()) @db.Uuid
+  name                String
+  email               String            @unique
+  role                UserRole
+  reviewerRole        ReviewerRole?
+  avatarUrl           String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  workflows           Workflow[]        @relation("WorkflowOwner")
+  updatedDrafts        WorkflowDraft[]   @relation("DraftUpdater")
+  publishedVersions   WorkflowVersion[] @relation("VersionPublisher")
+  requests            Request[]         @relation("RequestRequester")
+  decisions           Decision[]
+  simulations         Simulation[]
+  auditEvents          AuditEvent[]
+  idempotencyRecords  IdempotencyRecord[]
+}
+
+model Workflow {
+  id              String            @id @default(uuid()) @db.Uuid
+  name            String
+  description     String?
+  status          WorkflowStatus    @default(DRAFT)
+  ownerId         String            @db.Uuid
+  activeVersionId String?           @unique @db.Uuid
+  archivedAt      DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  owner           User              @relation("WorkflowOwner", fields: [ownerId], references: [id])
+  draft           WorkflowDraft?
+  versions        WorkflowVersion[] @relation("WorkflowVersions")
+  activeVersion   WorkflowVersion?  @relation("ActiveWorkflowVersion", fields: [activeVersionId], references: [id])
+  simulations     Simulation[]
+
+  @@index([ownerId, status])
+}
+
+model WorkflowDraft {
+  workflowId  String   @id @db.Uuid
+  revision    Int      @default(1)
+  graph       Json
+  viewport    Json?
+  updatedById String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  workflow    Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  updatedBy   User     @relation("DraftUpdater", fields: [updatedById], references: [id])
+}
+
+model WorkflowVersion {
+  id            String    @id @default(uuid()) @db.Uuid
+  workflowId    String    @db.Uuid
+  versionNumber Int
+  graphSnapshot Json
+  changeSummary Json
+  publishedById String    @db.Uuid
+  publishedAt   DateTime  @default(now())
+  workflow      Workflow  @relation("WorkflowVersions", fields: [workflowId], references: [id], onDelete: Restrict)
+  activeFor     Workflow? @relation("ActiveWorkflowVersion")
+  publishedBy   User      @relation("VersionPublisher", fields: [publishedById], references: [id])
+  requests      Request[]
+
+  @@unique([workflowId, versionNumber])
+  @@index([workflowId, publishedAt])
+}
+
+model Request {
+  id                     String        @id @default(uuid()) @db.Uuid
+  workflowVersionId      String        @db.Uuid
+  requesterId            String        @db.Uuid
+  formData                Json
+  status                  RequestStatus @default(IN_PROGRESS)
+  currentNodeId           String?
+  assignedReviewerRole    ReviewerRole?
+  routeTrace              Json
+  completedAt             DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  workflowVersion         WorkflowVersion @relation(fields: [workflowVersionId], references: [id], onDelete: Restrict)
+  requester               User          @relation("RequestRequester", fields: [requesterId], references: [id])
+  decisions               Decision[]
+
+  @@index([requesterId, status])
+  @@index([assignedReviewerRole, status])
+  @@index([workflowVersionId])
+}
+
+model Decision {
+  id           String          @id @default(uuid()) @db.Uuid
+  requestId    String          @db.Uuid
+  reviewNodeId String
+  reviewerId   String          @db.Uuid
+  outcome      DecisionOutcome
+  reason       String?
+  decidedAt    DateTime        @default(now())
+  request      Request         @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  reviewer     User            @relation(fields: [reviewerId], references: [id])
+
+  @@unique([requestId, reviewNodeId])
+  @@index([reviewerId, decidedAt])
+}
+
+model Simulation {
+  id            String           @id @default(uuid()) @db.Uuid
+  workflowId    String           @db.Uuid
+  draftRevision Int
+  input          Json
+  status         SimulationStatus
+  trace          Json
+  createdById    String           @db.Uuid
+  createdAt      DateTime         @default(now())
+  workflow       Workflow         @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  createdBy      User             @relation(fields: [createdById], references: [id])
+
+  @@index([workflowId, createdAt])
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @db.Uuid
+  entityType String
+  entityId   String
+  action     String
+  metadata   Json
+  timestamp  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId, timestamp])
+  @@index([actorId, timestamp])
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  key            String
+  userId         String   @db.Uuid
+  operation      String
+  requestHash    String
+  responseStatus Int
+  responseBody   Json
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, operation, key])
+  @@index([expiresAt])
+}

@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: decisionflow
+      POSTGRES_PASSWORD: decisionflow
+      POSTGRES_DB: decisionflow
+    ports:
+      - '5432:5432'
+    volumes:
+      - decisionflow_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U decisionflow -d decisionflow']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://decisionflow:decisionflow@postgres:5432/decisionflow?schema=public
+      JWT_SECRET: docker-demo-secret-change-before-any-real-deployment
+      CORS_ORIGINS: http://localhost:5173
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ['sh', '-c', 'npx prisma migrate deploy && npm run prisma:seed && node dist/main.js']
+
+volumes:
+  decisionflow_pgdata:
